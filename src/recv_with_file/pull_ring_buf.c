@@ -25,21 +25,25 @@ MODULE_DESCRIPTION("A Ring buffer module");
 #define MY_MACIG 'G'
 #define READ_IOCTL _IOR(MY_MACIG, 0, int)
 #define WRITE_IOCTL _IOW(MY_MACIG, 1, int)
-
+#define READ_IOCTL_SYN _IOR(MY_MACIG,2,int)
 static dev_t dev;
 static struct cdev c_dev;
 static struct class *cl;
 
 extern int bufid;
 //extern int tx_bufid;
-extern int rx_bufid;
+int rx_bufid;
+int size=1;
+struct task_struct *pull_task_syn;
+struct task_struct *sleeping_task;
+struct pull_st *buf;
+unsigned char get_buf[NO_OF_BYTES_TO_PULL];
+
 
 #ifdef KTHREADS
 extern struct task_struct *pull_task;
 extern struct task_struct *post_task;
-
 unsigned char out_buf[NO_OF_BYTES_TO_PULL];
-
 extern struct data_ring_buff rings[RING_BUFFER_SLOTS];
 int pull_data_from_ring_buffer(void *buff)
 {
@@ -103,81 +107,178 @@ int pull_data_from_ring_buffer(void *buff)
 }
 #endif
 
+
+
+
+int pull_thread_syn(void *data)
+{
+        int ret;
+        int r;
+        int f;
+        int flag=0;
+        printk("pull thread started\n");
+	set_current_state(TASK_INTERRUPTIBLE);
+	schedule();
+	while(!kthread_should_stop())
+	{
+
+		set_current_state(TASK_INTERRUPTIBLE);
+		if(size==0 && (bytes_used(rx_bufid)>=39))
+		{
+                        
+			ret = get_data(rx_bufid,117, get_buf);
+                        printk(KERN_INFO "\n\nget_data return: %d  \n\n",ret);
+			if(ret == E_OP_MISMATCH || ret == EBUF_EMPTY) {
+				printk(KERN_ALERT "\nFailed to get data from ring buffer\n");
+                                flag=1;
+	                        break;
+				
+			}
+			r=ret;
+			ret = pull(rx_bufid, ret);
+			if(ret == E_OP_MISMATCH || ret == ERR_PULL_MORE_THAN_GET) {
+				printk(KERN_ALERT "\nFailed to pull data from ring buffer\n");
+                                flag=1;
+				break;
+			}
+
+		        f=copy_to_user((unsigned char *)buf->buf, get_buf,r);                       
+                        printk("return value of copy to userbuf %d\n",f);
+                        f=copy_to_user((int *)&buf->len,&r,4);
+                        printk("return value of copy to userlen %d\n",f);
+                        size=r;
+                        printk("copied to user\n");
+		}
+		schedule();
+		__set_current_state(TASK_RUNNING);
+	}
+     if(flag==1)
+    {
+       while(!kthread_should_stop())
+       {
+	set_current_state(TASK_INTERRUPTIBLE);
+	schedule();
+       }
+    }
+      return(0);
+
+}
+
+
 static int pull_open(struct inode *inode, struct file *file)
 {
 	//printk(KERN_ALERT "\n Open in pull \n");
 	return 0;
 }
 
+struct pull_st *buf;
+	
 unsigned char get_buf[NO_OF_BYTES_TO_PULL];
 //static int device_ioctl(struct inode *inode, struct file *filp, unsigned int cmd, unsigned long args)
 static long pull_ioctl(struct file *filp, unsigned int cmd, unsigned long args)
 {
-	int ret,r,len,i;
-	struct pull_st *buf;
+	int ret,r,len,num;
+
 	buf=(struct pull_st *)args;
-	int total=0;
 
 	switch(cmd)
 	{
 		case READ_IOCTL:
 			memset(get_buf, 0, NO_OF_BYTES_TO_PULL);  
 			copy_from_user(&len,(int *)&buf->len,4);
-		//	if(rx_bufid==Rx){
-                 {
-				while( bytes_used(rx_bufid) > 0)
+
+			{
+
+				if( bytes_used(rx_bufid) >= len)
 				{
 
-					ret = get_data(rx_bufid,1000, get_buf+total);
-                                        total+=ret;
-					printk(KERN_INFO "\n\nget_data return: %d  %d \n\n",ret,total);
+					ret = get_data(rx_bufid,len, get_buf);
+
+					//printk(KERN_INFO "\n\nget_data return: %d  \n\n",ret);
 					if(ret == E_OP_MISMATCH || ret == EBUF_EMPTY) {
 						printk(KERN_ALERT "\nFailed to get data from ring buffer\n");
 						return -1;
 					}
 					r=ret;
-					//ret = pull(bufid, NO_OF_BYTES_TO_PULL);
 					ret = pull(rx_bufid, ret);
 					if(ret == E_OP_MISMATCH || ret == ERR_PULL_MORE_THAN_GET) {
 						printk(KERN_ALERT "\nFailed to pull data from ring buffer\n");
 						return -1;
 					}
-					
-                                       
+
+					copy_to_user((unsigned char *)buf->buf, get_buf,len);
+					return r;
+
 				}
-			
+				else
+				{  //printk("not enough data in ringbuffer\n");
+					return -1;
+				}
 			}
-                         //  else 
-                           //   return -1;
-                         //end of if(rx_bufid==Rx)
-			//	else{
-			//	ret = post_data(tx_bufid,get_buf, len);	
-			//	}//else
 
+		case READ_IOCTL_SYN:
+			copy_from_user(&len,(int *)&buf->len,4);
+			if(bytes_used(rx_bufid)<len)
+			{
+				sleeping_task=current;
+				set_current_state(TASK_INTERRUPTIBLE);
+				r=schedule_timeout(25);
+			//	printk("timeout return value %d\n",r);   
+			}
+			
+			if(len<=(bytes_used(rx_bufid)))
+			{
+				ret = get_data(rx_bufid,len, get_buf);
 
+				//printk(KERN_INFO "\n\nget_data return: %d  \n\n",ret);
+				if(ret == E_OP_MISMATCH || ret == EBUF_EMPTY) 
+				{
 
-			/*	for(i=0;i<NO_OF_BYTES_TO_PULL;i++) {
-				if(get_buf[i] != 0xff) {
-				printk(KERN_INFO "\n\nBuffer Corrupted: get_buf[%d]=%d\n\n",i,get_buf[i]);
-				return -1;
+					printk(KERN_ALERT "\nFailed to get data from ring buffer\n");
+					return -1;
 				}
+				r=ret;
+				ret = pull(rx_bufid, ret);
+				if(ret == E_OP_MISMATCH || ret == ERR_PULL_MORE_THAN_GET) 
+				{
+					printk(KERN_ALERT "\nFailed to pull data from ring buffer\n");
+					return -1;
 				}
-			 */
+				copy_to_user((unsigned char *)buf->buf, get_buf,len);
+				return r;
+			}
+                        else if(len>=(bytes_used(rx_bufid)) && bytes_used(rx_bufid)>0)
+                        {
+                          num=bytes_used(rx_bufid);
+                          
+				ret = get_data(rx_bufid,num, get_buf);
 
-			//serial_send(get_buf, NO_OF_BYTES_TO_PULL);
-			//j printk("r=%d\n",r);
-			//j for(i=0;i<r;i++) printk("%c",get_buf[i]);
-			//j serial_send(get_buf, r);
-		//	for(i=0;i<total;i++)
-		//		printk("%d\n",get_buf[i]);
+				//printk(KERN_INFO "\n\nget_data return: %d  \n\n",ret);
+				if(ret == E_OP_MISMATCH || ret == EBUF_EMPTY) 
+				{
 
-			copy_to_user((unsigned char *)buf->buf, get_buf,total);
-			printk(KERN_INFO "\n\npull_data return: %d\n\n",total);
-			//for(i=0;i<100;i++) printk("%c",get_buf[i]);
-			break;
+					printk(KERN_ALERT "\nFailed to get data from ring buffer\n");
+					return -1;
+				}
+				r=ret;
+				ret = pull(rx_bufid, ret);
+				if(ret == E_OP_MISMATCH || ret == ERR_PULL_MORE_THAN_GET) 
+				{
+					printk(KERN_ALERT "\nFailed to pull data from ring buffer\n");
+					return -1;
+				}
+                                
+				copy_to_user((unsigned char *)buf->buf, get_buf,r);
+				copy_to_user((int *)&buf->len, &r,4);
+                                return r;
+                        }
+                        else
+                          return -1;
+                         
+		default:
+			printk("wrong command\n");
+			return -1;
 	}
-
-	return total;
 }
 
 static int pull_release(struct inode *inode, struct file *file)
@@ -226,6 +327,8 @@ static int __init pull_main(void)
 		unregister_chrdev_region(dev, MINOR_CNT);
 		return PTR_ERR(dev_ret);
 	}
+	
+  //      pull_task_syn = kthread_run(&pull_thread_syn,NULL,"pull_data_syn_thread");
 
 	printk(KERN_ALERT "\n PUll Device is initialize \n");
 
@@ -237,6 +340,7 @@ static void __exit pull_cleanup(void)
 #ifdef KTHREADS
 	kthread_stop(pull_task);
 #endif
+//	kthread_stop(pull_task_syn);
 	printk(KERN_ALERT "\n Pull Device is Released or closed \n");
 	device_destroy(cl, dev);
 	class_destroy(cl);
@@ -250,7 +354,8 @@ static void __exit pull_cleanup(void)
 //EXPORT_SYMBOL(pull_task);
 EXPORT_SYMBOL(pull_data_from_ring_buffer);
 #endif
-
-//EXPORT_SYMBOL(rx_bufid);
+EXPORT_SYMBOL(sleeping_task);
+EXPORT_SYMBOL(pull_task_syn);
+EXPORT_SYMBOL(rx_bufid);
 module_init(pull_main);
 module_exit(pull_cleanup);
