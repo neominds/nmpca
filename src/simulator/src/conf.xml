@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration>
+	<Attributes>
+		<parameter>serverAddress</parameter>
+		<value>192.168.3.117</value>
+		<description>Server Address</description>
+	</Attributes>
+	<Attributes>
+		<parameter>serverPort</parameter>
+		<value>15000</value>
+		<description>Port Number of the Server</description>
+	</Attributes>
+	<Attributes>
+		<parameter>logFilePath</parameter>
+		<value></value>
+		<description>Path of the Log file</description>
+	</Attributes>
+</Configuration>
