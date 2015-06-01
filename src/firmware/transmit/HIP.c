@@ -22,10 +22,9 @@
 //#include<stdio.h>
 //#include<string.h>
 
-
+int Tx_bufid;
 int tx_bufid;
 int txbufid;
-int Tx_bufid;
 int rxbufid;
 spinlock_t b_lock;
 struct task_struct *tp_tx_task;
@@ -156,29 +155,28 @@ int read_data_from_vocoder(void *data)
 	int ret, frame_end,r;
 	unsigned char buf[200];
 	int j, nlen=15;
+        int flag=1,num;
+        unsigned long interval;
+        
         set_current_state(TASK_INTERRUPTIBLE);
         schedule();
 	while(!kthread_should_stop())
+        {
 
-	{
-
-
-
-                set_current_state(TASK_INTERRUPTIBLE);
-		if(bytes_used(tx_bufid)>0)
+               set_current_state(TASK_INTERRUPTIBLE);
+		if(bytes_used(tx_bufid)>=39)
 		{
-                        ret= get_data(tx_bufid,100,buf+5);	
+                        flag=1;
+                        ret= get_data(tx_bufid,39,buf+5);	
 			if(ret>0)
 				{
                                    pull(tx_bufid,ret);
                                        tot+=ret;
-                                
-                        
-			r = voq_post(buf, ret+5);
+                                   r = voq_post(buf, ret+5);
                                 }
 			if(r == 0) {
 				printk(KERN_ALERT "voq_post:: Failed to post data to ring buffer\n");
-				return;
+				continue;
 
 			}
                         else if(r>0)
@@ -187,10 +185,43 @@ int read_data_from_vocoder(void *data)
 			frame_end = get_ring_buf_tail(txbufid);
 
 			new_frame_event(VOC_NEWFRAME_EVENT, frame_end, r);
-                   msleep_interruptible(5);
+                        msleep_interruptible(5);
+                 }
+               else if (bytes_used(tx_bufid)>0)
+                  {
+                     if(flag==1)
+                     {
+                       interval =jiffies;
+                       flag=0;
+                     }
+                     else if(time_after(jiffies,interval+50))
+                     {
+                         num=bytes_used(tx_bufid); 
+                        ret= get_data(tx_bufid,num,buf+5);	
+			if(ret>0)
+				{
+                                   pull(tx_bufid,ret);
+                                       tot+=ret;
+                                   r = voq_post(buf, ret+5);
+                                }
+			if(r == 0) {
+				printk(KERN_ALERT "voq_post:: Failed to post data to ring buffer\n");
+				continue;
 
-		}
-               else
+			}
+                        else if(r>0)
+                         cnt_voc++;
+
+			frame_end = get_ring_buf_tail(txbufid);
+			new_frame_event(VOC_NEWFRAME_EVENT, frame_end, r);
+                       
+
+                     }
+                     else
+                      msleep_interruptible(5);
+
+                  }
+             else 
                 {
                    schedule();
                    __set_current_state(TASK_RUNNING);
@@ -603,14 +634,14 @@ int ic_send(unsigned char *buf, int new_frame_len)
 int ic_evt_processing(void *data) //kernel thread
 {
 	int ret, sret, index,ret1,i;
-
-
+        unsigned char buf[200];
+        struct frames fr;
+        fr.start=START_FRAME;
+        fr.stop=END_FRAME;
 	set_current_state(TASK_INTERRUPTIBLE);
 	schedule();
-       
-
-
-	while(!kthread_should_stop()) 
+         
+       while(!kthread_should_stop()) 
 	{
 		//		printk(KERN_ALERT "Inside ic_evt_processing function\n");
 
@@ -623,18 +654,13 @@ int ic_evt_processing(void *data) //kernel thread
 			if(index==SIZE_OF_EVT_BUF) 
 			{
 
-
-
-
-				printk(KERN_ALERT "ic_evt_processing:: Empty buffer\n");
+                                printk(KERN_ALERT "ic_evt_processing:: Empty buffer\n");
 				continue;
 			}
 
 			reset_event(index, TP_TX_NEWFRAME_EVENT);
 
-			unsigned char buf[tp_tx_evt_st[index].new_frame_len];
-
-			ret = icq_get(buf, tp_tx_evt_st[index].new_frame_len);
+		        ret = icq_get(buf+2, tp_tx_evt_st[index].new_frame_len);
 			if(ret == E_OP_MISMATCH || ret == EBUF_EMPTY||ret < 0) 
 			{
 				printk(KERN_INFO "ic_evt_processing: Failed to get data from ring buffer %d\n",ret);
@@ -642,18 +668,17 @@ int ic_evt_processing(void *data) //kernel thread
 
 			}
 
-
-
-                     
-                        
-			add_ic_hdr_to_data(buf);
+                        add_ic_hdr_to_data(buf+2);
                //	printk("size: %hu packet: %d\n",get_len_from_data(buf),cnt_ic);
 		//	for(i=0;i<ret;i++)
 		//		printk("%d\n",buf[i]);
-			ret1=post_data(Tx_bufid,buf,ret);
-			cnt_ic++;
-
-			ret = icq_pull(ret);
+                        
+                        memcpy(buf,&fr.start,sizeof(short int));
+                        memcpy(buf+ret+2,&fr.stop,sizeof(short int)); 
+                        
+			ret1=post_data(Tx_bufid,buf,ret+4);
+                        cnt_ic++;
+                        ret = icq_pull(ret);
 			if(ret == E_OP_MISMATCH || ret == ERR_PULL_MORE_THAN_GET) 
 			{
 				printk(KERN_INFO "ic_evt_processing: Pull failed\n");
@@ -708,12 +733,14 @@ int ic_recv(void *data)
 static int __init HIP_main(void)
 {
 	int i;
+        tx_bufid=ring_buf_init();
+	Tx_bufid = ring_buf_init();
+	
 	txbufid = ring_buf_init();
-        Tx_bufid =ring_buf_init();
-	printk(KERN_ALERT "\n tx_bufid is %d \n",tx_bufid);
-	printk(KERN_ALERT "\n txbufid is %d \n",txbufid);
-	printk(KERN_ALERT "\n Tx_bufid is %d \n",Tx_bufid);
-        
+
+	printk(KERN_ALERT "\ntx_bufid txbufid  Tx_bufid is %d %d %d\n",tx_bufid,txbufid,Tx_bufid);
+
+
 	spin_lock_init(&b_lock);
         spin_lock_init(&v_lock);
 	tp_tx_task = kthread_run(&tp_tx_evt_processing, NULL, "tp_tx_evt_processing");
@@ -740,19 +767,20 @@ static void __exit HIP_cleanup(void)
        // del_timer(&my_timer);
 	printk(KERN_INFO "Cleaning up HIP module.\n\n");
         
-	printk(KERN_ALERT "\ntxbufid tx_bufid Tx_bufid txbufid is %d %d %d \n",tx_bufid,Tx_bufid,txbufid);
-	
+	printk(KERN_ALERT "\ntx_bufid txbufid  Tx_bufid is %d %d %d\n",tx_bufid,txbufid,Tx_bufid);
+//	printk(KERN_ALERT "\nrxbufid Rx_bufid is %d \n",rxbufid,Rx_bufid);
 }
 
+EXPORT_SYMBOL(tx_bufid);
+EXPORT_SYMBOL(Tx_bufid);
+EXPORT_SYMBOL(txbufid);
 EXPORT_SYMBOL(tp_tx_evt_processing);
 EXPORT_SYMBOL(tp_rx_evt_processing);
 EXPORT_SYMBOL(ic_evt_processing);
 EXPORT_SYMBOL(read_data_from_vocoder);
 EXPORT_SYMBOL(voc_task);
 EXPORT_SYMBOL(tp_tx_task);
-EXPORT_SYMBOL(txbufid);
-EXPORT_SYMBOL(Tx_bufid);
-EXPORT_SYMBOL(tx_bufid);
+
 module_init(HIP_main);
 module_exit(HIP_cleanup);
 

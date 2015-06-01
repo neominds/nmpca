@@ -114,6 +114,7 @@ struct timeval tm;
 unsigned long int msec;
 unsigned int syn_count=0;
 int syn_flag=0;
+int count=10;
 
 enum hrtimer_restart pca_tdma_timer_event_handler(  struct hrtimer *timer )
 {
@@ -121,12 +122,15 @@ enum hrtimer_restart pca_tdma_timer_event_handler(  struct hrtimer *timer )
 	int flag1;
 	syn_count++;
         
-         if(syn_count>=1000||syn_flag<3)
+         if(syn_count>=count||syn_flag<5)
         {
 	        atomic_set(&flag,30);
 		wake_up_process(tdma_main_thread);
 		syn_count=0;
+                if(syn_flag<5)
                 syn_flag++;
+                else
+                count=100;
                 return HRTIMER_NORESTART;
 	}	
 	else
@@ -405,7 +409,7 @@ void pca_tdma_main_loop(void )
 				interval2=get_ms()-previous1;
 				previous1=get_ms();
 				tiflag2=1;
-		        	mdelay(3);
+		        	mdelay(10);
 			}
 			if(tflag2==0)
 			{
@@ -413,7 +417,7 @@ void pca_tdma_main_loop(void )
 				previous1=get_ms();
 				tflag2=1;
 				tiflag2=1;
-		         	mdelay(3);
+		         	mdelay(10);
                                 printk("HELLO RX\n");
 			} 
 
@@ -451,11 +455,11 @@ void pca_tdma_main_loop(void )
 
 			
 
-			if(get_ms()>=(previous1+97000)||cnt>=1080)
+			if(get_ms()>=(previous1+90000)||cnt>=1030)
 			{
-
+                                inter2=get_ms()-previous1;
 				if(count1!=0)		
-					printk("slot no: %d  time interval: %lu guard interval %lu count: %d bytes_slot: %d total_bytes: %d\n",slot_num,interval2,get_ms()-previous1,count1,cnt,slot_cnt);
+					printk("slot no: %d  time interval: %lu guard interval %lu count: %d bytes_slot: %d total_bytes: %d\n",slot_num,interval2,inter2,count1,cnt,slot_cnt);
 				atomic_set(&flag,20);
 			} 
 		}
@@ -481,11 +485,19 @@ void pca_tdma_main_loop(void )
                                 {
                                         ch=101;
                                         serial_send(&ch,1);
+                                        printk("recieved 100 sending 101\n");
+                                        ch=1;
+                                 }
+                                    
+                               else  if(ch==102)
+                                {
+                                        ch=103;
+                                        serial_send(&ch,1);
                                         atomic_set(&flag,20);
                                         sync_time1=get_ms()-sync_time;
                                         pca_tdma_start_timer();
-                                        printk("recieved 100 sending 101\n");
-                                        printk("\nsync time: %lu\n",sync_time1);
+                                        printk("recieved 102 sending 103\n");
+                                        printk("\nsync time: %lu\n\n",sync_time1);
                                         tflag2=0;
                                         break;
                                 }

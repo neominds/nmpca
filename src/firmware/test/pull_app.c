@@ -8,22 +8,32 @@
 #define MY_MACIG 'G'
 #define READ_IOCTL _IOR(MY_MACIG, 0, char *)
 #define WRITE_IOCTL _IOW(MY_MACIG, 1, char *)
-
+#define READ_IOCTL_SYN _IOR(MY_MACIG, 2, char *)
 #define NO_OF_BYTES_TO_PULL 1000000
 
-int main()
+int main(int argc,char **argv )
 {
+        if(argc!=2)
+        {
+          printf("wrong format\n");
+          return 0;
+        }
+        char *num;
 	int fd, i,ret;
 //	unsigned char msg[NO_OF_BYTES_TO_PULL];
-	FILE *fp;
+ 	FILE *fp;
+        int l;     
 	struct pull_st pull_data;
+        num=argv[1];
+        l=atoi(num);
+        printf("%d\n",l);
 	pull_data.type=Rx;
-	pull_data.len=10000000;
+	pull_data.len=l;
 	pull_data.buf=(unsigned char *)malloc(pull_data.len);
 
 		fd = open("/dev/my_cdev", O_RDWR);
 		if(fd<0){ printf("pull open fails\n"); return 1;}
-		if((ret=ioctl(fd, READ_IOCTL,&pull_data))<0) {
+		if((ret=ioctl(fd, READ_IOCTL_SYN,&pull_data))<0) {
 			printf("pull ioctl fail\n");
 			close(fd);
 			return 0;
